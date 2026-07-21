@@ -3,8 +3,8 @@
 //| Author: RayyanGanteng                                            |
 //+------------------------------------------------------------------+
 #property copyright "RayyanGanteng"
-#property version   "1.3"
-#define EA_VERSION  "1.3"
+#property version   "1.4"
+#define EA_VERSION  "1.4"
 #property strict
 
 #include "Include/iScalp_Panel.mqh"
@@ -22,7 +22,12 @@ datetime   g_lastBar = 0;
 
 int OnInit()
 {
-   Alert("Personal Scalping Tool by RayyanGanteng - Version " + EA_VERSION);
+   // Greet only on a genuine attach — stay silent on TF switch, recompile,
+   // input change and template reload (all of which re-run OnInit).
+   int prevReason = UninitializeReason();
+   if(prevReason != REASON_CHARTCHANGE && prevReason != REASON_PARAMETERS &&
+      prevReason != REASON_RECOMPILE   && prevReason != REASON_TEMPLATE)
+      Alert("Personal Scalping Tool by RayyanGanteng - Version " + EA_VERSION);
 
    g_magic = DeriveMagic();
 

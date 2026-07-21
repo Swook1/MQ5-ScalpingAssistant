@@ -156,7 +156,9 @@ void _SetDragRect(const string n, int x, int y, int w, int h, color bg)
    ObjectSetInteger(0, n, OBJPROP_BGCOLOR,    bg);
    ObjectSetInteger(0, n, OBJPROP_COLOR,      bg);
    ObjectSetInteger(0, n, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-   ObjectSetInteger(0, n, OBJPROP_SELECTABLE, 1);
+   // Not selectable: drag is handled manually from CHARTEVENT_MOUSE_MOVE,
+   // and a selectable label would just show grab handles on click.
+   ObjectSetInteger(0, n, OBJPROP_SELECTABLE, 0);
    ObjectSetInteger(0, n, OBJPROP_SELECTED,   0);
    ObjectSetInteger(0, n, OBJPROP_HIDDEN,     1);
    ObjectSetInteger(0, n, OBJPROP_ZORDER,     1);
@@ -562,19 +564,79 @@ string PanelEditText(long magic, const string key)
    return ObjectGetString(0, PN(magic, key), OBJPROP_TEXT);
 }
 
+//--- Panel drag state (manual mouse drag of the title bar)
+bool g_pnlDragging  = false;
+int  g_pnlDragDX    = 0;      // cursor offset from panel origin at grab time
+int  g_pnlDragDY    = 0;
+bool g_pnlScrollWas = true;   // CHART_MOUSE_SCROLL value to restore on drop
+
+// True when (mx,my) is over the title bar but clear of its right-hand buttons
+bool _InTitleDragZone(const PanelState &s, int mx, int my)
+{
+   double sc = s.panelScale; if(sc < 1.0) sc = 1.0; if(sc > 3.0) sc = 3.0;
+   int titleH = _SS(PNL_TITLE_H, sc);
+   int fullW  = _SS(PNL_W, sc);
+   // Mirror PanelDraw's button block so the minimise/scale buttons stay clickable
+   int btnArea = _SS(22, sc) * 3 + _SS(2, sc) * 2 + _SS(8, sc);
+
+   return (mx >= s.panelX && mx <= s.panelX + fullW - btnArea &&
+           my >= s.panelY && my <= s.panelY + titleH);
+}
+
+// Move panel origin, keeping the title bar reachable inside the chart
+void _PanelMoveTo(PanelState &s, int nx, int ny)
+{
+   double sc = s.panelScale; if(sc < 1.0) sc = 1.0; if(sc > 3.0) sc = 3.0;
+   int titleH = _SS(PNL_TITLE_H, sc);
+   int fullW  = _SS(PNL_W, sc);
+   int chartW = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS);
+   int chartH = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+
+   int maxX = MathMax(0, chartW - fullW);
+   int maxY = MathMax(0, chartH - titleH);
+   s.panelX = (int)MathMax(0, MathMin(maxX, nx));
+   s.panelY = (int)MathMax(0, MathMin(maxY, ny));
+}
+
 // Main event handler — call from OnChartEvent
 // Returns true if the event was consumed by the panel
 bool PanelHandleEvent(long magic, PanelState &state, double clBuf, double slMult,
                       const int id, const long lparam, const double dparam, const string sparam)
 {
-   // --- Panel drag via title rectangle ---
-   if(id == CHARTEVENT_OBJECT_DRAG && sparam == PN(magic, "DRAG"))
+   // --- Panel drag via title bar (manual: MT5 sends no OBJECT_DRAG for
+   //     screen-anchored objects such as OBJ_RECTANGLE_LABEL) ---
+   if(id == CHARTEVENT_MOUSE_MOVE)
    {
-      state.panelX = (int)ObjectGetInteger(0, PN(magic,"DRAG"), OBJPROP_XDISTANCE);
-      state.panelY = (int)ObjectGetInteger(0, PN(magic,"DRAG"), OBJPROP_YDISTANCE);
-      PanelDraw(magic, state);
-      SaveState(magic, state);
-      return true;
+      int  mx      = (int)lparam;
+      int  my      = (int)dparam;
+      bool leftBtn = ((int)StringToInteger(sparam) & 1) != 0;
+
+      if(!g_pnlDragging && leftBtn && _InTitleDragZone(state, mx, my))
+      {
+         g_pnlDragging = true;
+         g_pnlDragDX   = mx - state.panelX;
+         g_pnlDragDY   = my - state.panelY;
+         // Suspend chart panning so the chart does not scroll under the panel
+         g_pnlScrollWas = (bool)ChartGetInteger(0, CHART_MOUSE_SCROLL);
+         ChartSetInteger(0, CHART_MOUSE_SCROLL, false);
+         return true;
+      }
+
+      if(g_pnlDragging && leftBtn)
+      {
+         _PanelMoveTo(state, mx - g_pnlDragDX, my - g_pnlDragDY);
+         PanelDraw(magic, state);
+         ChartRedraw(0);
+         return true;
+      }
+
+      if(g_pnlDragging && !leftBtn)   // button released — commit position
+      {
+         g_pnlDragging = false;
+         ChartSetInteger(0, CHART_MOUSE_SCROLL, g_pnlScrollWas);
+         SaveState(magic, state);
+         return true;
+      }
    }
 
    // --- Chart line drag (floor / ceil / entry) ---
